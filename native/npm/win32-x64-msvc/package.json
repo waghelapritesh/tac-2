@@ -1,0 +1,20 @@
+{
+  "name": "@waghelapritesh/engine-win32-x64-msvc",
+  "version": "2.77.0",
+  "description": "TAC native engine binary for Windows x64 (MSVC)",
+  "os": [
+    "win32"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "main": "tac_engine.node",
+  "files": [
+    "tac_engine.node"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/waghelapritesh/tac-2.git"
+  }
+}

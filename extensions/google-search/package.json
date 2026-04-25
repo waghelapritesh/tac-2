@@ -1,0 +1,21 @@
+{
+  "name": "@tac-extensions/google-search",
+  "version": "1.0.0",
+  "description": "Web search via Google with AI-synthesized answers and source citations",
+  "type": "module",
+  "keywords": ["pi-package", "tac-extension"],
+  "tac": {
+    "extension": true
+  },
+  "pi": {
+    "extensions": ["./index.ts"]
+  },
+  "peerDependencies": {
+    "@tac/pi-coding-agent": "*",
+    "@tac/pi-tui": "*"
+  },
+  "dependencies": {
+    "@google/genai": "^1.40.0",
+    "@sinclair/typebox": "^0.34.41"
+  }
+}

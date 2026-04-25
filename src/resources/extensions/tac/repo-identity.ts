@@ -1,0 +1,657 @@
+/**
+ * TAC Repo Identity — external state directory primitives.
+ *
+ * Computes a stable per-repo identity hash, resolves the external
+ * `~/.tac/projects/<hash>/` state directory, and manages the
+ * `<project>/.tac → external` symlink.
+ */
+
+import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
+import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { basename, dirname, join, resolve } from "node:path";
+
+const tacHome = process.env.TAC_HOME || join(homedir(), ".tac");
+
+// ─── Repo Metadata ───────────────────────────────────────────────────────────
+
+export interface RepoMeta {
+  version: number;
+  hash: string;
+  gitRoot: string;
+  remoteUrl: string;
+  createdAt: string;
+}
+
+function isRepoMeta(value: unknown): value is RepoMeta {
+  if (!value || typeof value !== "object") return false;
+  const v = value as Record<string, unknown>;
+  return typeof v.version === "number"
+    && typeof v.hash === "string"
+    && typeof v.gitRoot === "string"
+    && typeof v.remoteUrl === "string"
+    && typeof v.createdAt === "string";
+}
+
+/**
+ * Write (or refresh) repo metadata into the external state directory.
+ * Called on open so metadata tracks repo path moves while keeping createdAt stable.
+ * Non-fatal: a metadata write failure must never block project setup.
+ */
+function writeRepoMeta(externalPath: string, remoteUrl: string, gitRoot: string): void {
+  const metaPath = join(externalPath, "repo-meta.json");
+  try {
+    let createdAt = new Date().toISOString();
+    let existing: RepoMeta | null = null;
+    if (existsSync(metaPath)) {
+      try {
+        const parsed = JSON.parse(readFileSync(metaPath, "utf-8"));
+        if (isRepoMeta(parsed)) {
+          existing = parsed;
+          createdAt = parsed.createdAt;
+          // Fast path: nothing changed.
+          if (
+            parsed.version === 1
+            && parsed.hash === basename(externalPath)
+            && parsed.gitRoot === gitRoot
+            && parsed.remoteUrl === remoteUrl
+          ) {
+            return;
+          }
+        }
+      } catch {
+        // Fall through and rewrite invalid metadata.
+      }
+    }
+
+    const meta: RepoMeta = {
+      version: 1,
+      hash: basename(externalPath),
+      gitRoot,
+      remoteUrl,
+      createdAt,
+    };
+    // Keep file format stable even when refreshing.
+    writeFileSync(metaPath, JSON.stringify(meta, null, 2) + "\n", "utf-8");
+  } catch {
+    // Non-fatal — metadata write failure should not block project setup
+  }
+}
+
+/**
+ * Read repo metadata from the external state directory.
+ * Returns null if the file doesn't exist or can't be parsed.
+ */
+export function readRepoMeta(externalPath: string): RepoMeta | null {
+  const metaPath = join(externalPath, "repo-meta.json");
+  try {
+    if (!existsSync(metaPath)) return null;
+    const raw = readFileSync(metaPath, "utf-8");
+    const parsed = JSON.parse(raw);
+    return isRepoMeta(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+// ─── Inherited-Repo Detection ───────────────────────────────────────────────
+
+/**
+ * Check whether `basePath` is inheriting a parent directory's git repo
+ * rather than being the git root itself.
+ *
+ * Returns true when ALL of:
+ *   1. basePath is inside a git repo (git rev-parse succeeds)
+ *   2. The resolved git root is a proper ancestor of basePath
+ *   3. There is no *project* `.tac` directory at the git root or any
+ *      intermediate ancestor (the parent project has not been
+ *      initialised with TAC)
+ *
+ * When true, the caller should run `git init` at basePath so that
+ * `repoIdentity()` produces a hash unique to this directory, preventing
+ * cross-project state leaks (#1639).
+ *
+ * When the git root already has a project `.tac`, the directory is a
+ * legitimate subdirectory of an existing TAC project — `cd src/ && /tac`
+ * should still load the parent project's milestones.
+ */
+export function isInheritedRepo(basePath: string): boolean {
+  try {
+    const root = resolveGitRoot(basePath);
+    const normalizedBase = canonicalizeExistingPath(basePath);
+    const normalizedRoot = canonicalizeExistingPath(root);
+    if (normalizedBase === normalizedRoot) return false; // basePath IS the root
+
+    // The git root is a proper ancestor. Check whether it already has .tac
+    // (i.e. the parent project was initialised with TAC).
+    if (isProjectTac(join(root, ".tac"))) return false;
+
+    // Walk up from basePath's parent to the git root checking for .tac.
+    // Start at dirname(normalizedBase), NOT normalizedBase itself — finding
+    // .tac at basePath means TAC state is set up for THIS project, which
+    // says nothing about whether the git repo is inherited from an ancestor.
+    let dir = dirname(normalizedBase);
+    while (dir !== normalizedRoot && dir !== dirname(dir)) {
+      if (isProjectTac(join(dir, ".tac"))) return false;
+      dir = dirname(dir);
+    }
+
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Distinguish a *project* `.tac` from the global `~/.tac` state directory.
+ *
+ * A project `.tac` is either:
+ *   - A symlink to an external state directory (normal post-migration layout)
+ *   - A legacy real directory that is NOT the global TAC home
+ *
+ * When the user's home directory is itself a git repo (e.g. dotfile managers),
+ * `~/.tac` exists but is the global state directory — not a project `.tac`.
+ * Treating it as a project `.tac` would cause isInheritedRepo() to wrongly
+ * conclude that subdirectories are part of the home "project" (#2393).
+ */
+function isProjectTac(tacPath: string): boolean {
+  if (!existsSync(tacPath)) return false;
+
+  try {
+    const stat = lstatSync(tacPath);
+
+    // Symlinks are always project .tac (created by ensureTacSymlink).
+    if (stat.isSymbolicLink()) return true;
+
+    // For real directories, check that this isn't the global TAC home.
+    // Recompute tacHome dynamically so env overrides (TAC_HOME) are
+    // picked up at call time, not just at module load time.
+    if (stat.isDirectory()) {
+      const currentTacHome = process.env.TAC_HOME || join(homedir(), ".tac");
+      const normalizedTacPath = canonicalizeExistingPath(tacPath);
+      const normalizedTacHome = canonicalizeExistingPath(currentTacHome);
+      if (normalizedTacPath === normalizedTacHome) return false;
+      return true;
+    }
+  } catch {
+    // lstat failed — treat as no .tac present
+  }
+
+  return false;
+}
+
+// ─── Repo Identity ──────────────────────────────────────────────────────────
+
+/**
+ * Get the git remote URL for "origin", or "" if no remote is configured.
+ * Uses `git config` rather than `git remote get-url` for broader compat.
+ */
+function getRemoteUrl(basePath: string): string {
+  try {
+    return execFileSync("git", ["config", "--get", "remote.origin.url"], {
+      cwd: basePath,
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 5_000,
+    }).trim();
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Resolve the git toplevel (real root) for the given path.
+ * For worktrees this returns the main repo root, not the worktree path.
+ */
+function canonicalizeExistingPath(path: string): string {
+  try {
+    // Use native realpath on Windows to resolve 8.3 short paths (e.g. RUNNER~1)
+    return process.platform === "win32" ? realpathSync.native(path) : realpathSync(path);
+  } catch {
+    return resolve(path);
+  }
+}
+
+function resolveGitCommonDir(basePath: string): string {
+  try {
+    return execFileSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], {
+      cwd: basePath,
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 5_000,
+    }).trim();
+  } catch {
+    const raw = execFileSync("git", ["rev-parse", "--git-common-dir"], {
+      cwd: basePath,
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 5_000,
+    }).trim();
+    return resolve(basePath, raw);
+  }
+}
+
+function resolveGitRoot(basePath: string): string {
+  try {
+    const commonDir = resolveGitCommonDir(basePath);
+    const normalizedCommonDir = commonDir.replaceAll("\\", "/");
+
+    // Normal repo or worktree with shared common dir pointing at <repo>/.git.
+    if (normalizedCommonDir.endsWith("/.git")) {
+      return canonicalizeExistingPath(resolve(commonDir, ".."));
+    }
+
+    // Some git setups may still expose <repo>/.git/worktrees/<name>.
+    const worktreeMarker = "/.git/worktrees/";
+    if (normalizedCommonDir.includes(worktreeMarker)) {
+      return canonicalizeExistingPath(resolve(commonDir, "..", ".."));
+    }
+
+    // Fallback for unusual layouts.
+    return canonicalizeExistingPath(execFileSync("git", ["rev-parse", "--show-toplevel"], {
+      cwd: basePath,
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 5_000,
+    }).trim());
+  } catch {
+    return resolve(basePath);
+  }
+}
+
+/**
+ * Validate a TAC_PROJECT_ID value.
+ *
+ * Must contain only alphanumeric characters, hyphens, and underscores.
+ * Call this once at startup so the user gets immediate feedback on bad values.
+ */
+export function validateProjectId(id: string): boolean {
+  return /^[a-zA-Z0-9_-]+$/.test(id);
+}
+
+/**
+ * Compute a stable identity for a repository.
+ *
+ * If `TAC_PROJECT_ID` is set, returns it directly (validation is expected
+ * to have already happened at startup via `validateProjectId`).
+ *
+ * For repos with a remote URL, returns SHA-256 of the remote URL only —
+ * this makes the identity stable across directory moves/renames (#2750).
+ *
+ * For local-only repos (no remote), includes the git root in the hash.
+ * Local repos use a `.tac-id` marker file for recovery after moves.
+ *
+ * Deterministic: same repo always produces the same hash regardless of
+ * which worktree the caller is inside.
+ */
+export function repoIdentity(basePath: string): string {
+  const projectId = process.env.TAC_PROJECT_ID;
+  if (projectId) {
+    return projectId;
+  }
+  const remoteUrl = getRemoteUrl(basePath);
+  if (remoteUrl) {
+    // Remote URL alone uniquely identifies the repo — path is redundant.
+    // This makes moves transparent for repos with remotes (#2750).
+    return createHash("sha256").update(remoteUrl).digest("hex").slice(0, 12);
+  }
+  // Local-only repo: include git root since there's no remote to anchor identity.
+  const root = resolveGitRoot(basePath);
+  const input = `\n${root}`;
+  return createHash("sha256").update(input).digest("hex").slice(0, 12);
+}
+
+// ─── External State Directory ───────────────────────────────────────────────
+
+/**
+ * Compute the external TAC state directory for a repository.
+ *
+ * Returns `$TAC_STATE_DIR/projects/<hash>` if `TAC_STATE_DIR` is set,
+ * otherwise `~/.tac/projects/<hash>`.
+ */
+export function externalTacRoot(basePath: string): string {
+  const base = process.env.TAC_STATE_DIR || tacHome;
+  return join(base, "projects", repoIdentity(basePath));
+}
+
+/**
+ * Resolve the root directory that stores project-scoped external state.
+ * Honors TAC_STATE_DIR override before falling back to TAC_HOME.
+ */
+export function externalProjectsRoot(): string {
+  const base = process.env.TAC_STATE_DIR || tacHome;
+  return join(base, "projects");
+}
+
+// ─── Numbered Variant Cleanup ────────────────────────────────────────────────
+
+/**
+ * macOS collision pattern: `.tac 2`, `.tac 3`, `.tac 4`, etc.
+ *
+ * When `symlinkSync` (or Finder) tries to create `.tac` but a real directory
+ * already exists at that path, macOS APFS silently renames the new entry to
+ * `.tac 2`, then `.tac 3`, and so on. These numbered variants confuse TAC
+ * because the canonical `.tac` path no longer resolves to the external state
+ * directory, making tracked planning files appear deleted.
+ *
+ * This helper scans the project root for entries matching `.tac <digits>` and
+ * removes them. It is called early in `ensureTacSymlink()` so that the
+ * canonical `.tac` path is always the one in use.
+ */
+const TAC_NUMBERED_VARIANT_RE = /^\.tac \d+$/;
+
+export function cleanNumberedTacVariants(projectPath: string): string[] {
+  const removed: string[] = [];
+  try {
+    const entries = readdirSync(projectPath);
+    for (const entry of entries) {
+      if (TAC_NUMBERED_VARIANT_RE.test(entry)) {
+        const fullPath = join(projectPath, entry);
+        try {
+          rmSync(fullPath, { recursive: true, force: true });
+          removed.push(entry);
+        } catch {
+          // Best-effort: if removal fails (e.g. permissions), continue with next
+        }
+      }
+    }
+  } catch {
+    // Non-fatal: readdir failure should not block symlink creation
+  }
+  return removed;
+}
+
+// ─── .tac-id Marker ─────────────────────────────────────────────────────────
+
+/**
+ * Write a `.tac-id` marker file in the project root.
+ *
+ * This file records the identity hash used for the external state directory.
+ * For local-only repos (no remote), this marker survives directory moves and
+ * enables automatic recovery of orphaned state (#2750).
+ *
+ * The marker is gitignored by ensureGitignore(). Non-fatal: failure to write
+ * the marker must never block project setup.
+ */
+function writeTacIdMarker(projectPath: string, identity: string): void {
+  try {
+    const markerPath = join(projectPath, ".tac-id");
+    // Only write if content differs to avoid unnecessary disk writes.
+    if (existsSync(markerPath)) {
+      try {
+        if (readFileSync(markerPath, "utf-8").trim() === identity) return;
+      } catch { /* fall through and overwrite */ }
+    }
+    writeFileSync(markerPath, identity + "\n", "utf-8");
+  } catch {
+    // Non-fatal — marker write failure should not block project setup
+  }
+}
+
+/**
+ * Read the `.tac-id` marker from the project root.
+ * Returns the identity hash, or null if the marker doesn't exist or is unreadable.
+ */
+function readTacIdMarker(projectPath: string): string | null {
+  try {
+    const markerPath = join(projectPath, ".tac-id");
+    if (!existsSync(markerPath)) return null;
+    const content = readFileSync(markerPath, "utf-8").trim();
+    return /^[a-zA-Z0-9_-]+$/.test(content) ? content : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Check whether an external state directory has meaningful content.
+ * Returns true if the directory contains any files or subdirectories
+ * beyond just repo-meta.json.
+ */
+function hasProjectState(externalPath: string): boolean {
+  try {
+    if (!existsSync(externalPath)) return false;
+    const entries = readdirSync(externalPath);
+    return entries.some(e => e !== "repo-meta.json");
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Resolve the external state directory, with recovery for relocated projects.
+ *
+ * For local-only repos where the computed identity produces an empty state dir,
+ * checks the `.tac-id` marker for the original identity hash and recovers
+ * the old state directory if it still exists and contains data (#2750).
+ *
+ * Returns the resolved external path (may differ from the computed identity).
+ */
+function resolveExternalPathWithRecovery(projectPath: string): string {
+  const computedPath = externalTacRoot(projectPath);
+  const computedId = repoIdentity(projectPath);
+
+  // Check if computed path already has state — fast path, no recovery needed.
+  if (hasProjectState(computedPath)) {
+    return computedPath;
+  }
+
+  // Check for .tac-id marker from a previous location.
+  const markerId = readTacIdMarker(projectPath);
+  if (markerId && markerId !== computedId) {
+    // The marker points to a different identity — the repo was likely moved.
+    const base = process.env.TAC_STATE_DIR || tacHome;
+    const markerPath = join(base, "projects", markerId);
+    if (hasProjectState(markerPath)) {
+      // Recover: use the old state directory and update the marker to the new identity.
+      // Move the state from the old hash dir to the new one so future lookups work
+      // without the marker.
+      try {
+        mkdirSync(computedPath, { recursive: true });
+        const entries = readdirSync(markerPath);
+        for (const entry of entries) {
+          try {
+            const src = join(markerPath, entry);
+            const dst = join(computedPath, entry);
+            // Use rename for same-filesystem (fast) or fall back to copy.
+            try {
+              renameSync(src, dst);
+            } catch {
+              cpSync(src, dst, { recursive: true, force: true });
+            }
+          } catch { /* continue with remaining entries */ }
+        }
+        // Clean up old directory after successful migration.
+        try { rmSync(markerPath, { recursive: true, force: true }); } catch { /* non-fatal */ }
+      } catch {
+        // If migration fails, just point at the old directory.
+        return markerPath;
+      }
+    }
+  }
+
+  return computedPath;
+}
+
+// ─── Symlink Management ─────────────────────────────────────────────────────
+
+/**
+ * Ensure the `<project>/.tac` symlink points to the external state directory.
+ *
+ * 1. Clean up any macOS numbered collision variants (`.tac 2`, `.tac 3`, etc.)
+ * 2. Resolve external dir (with relocation recovery via `.tac-id` marker)
+ * 3. mkdir -p the external dir
+ * 4. If `<project>/.tac` doesn't exist → create symlink
+ * 5. If `<project>/.tac` is already the correct symlink → no-op
+ * 6. If `<project>/.tac` is a real directory → return as-is (migration handles later)
+ * 7. Write `.tac-id` marker for future relocation recovery
+ *
+ * Returns the resolved external path.
+ */
+export function ensureTacSymlink(projectPath: string): string {
+  const result = ensureTacSymlinkCore(projectPath);
+
+  // Write .tac-id marker so future relocations can recover this state (#2750).
+  // Only write for the project root (not subdirectories or worktrees that
+  // delegate to a parent .tac).
+  if (!isInsideWorktree(projectPath)) {
+    writeTacIdMarker(projectPath, repoIdentity(projectPath));
+  }
+
+  return result;
+}
+
+function ensureTacSymlinkCore(projectPath: string): string {
+  const externalPath = resolveExternalPathWithRecovery(projectPath);
+  const localTac = join(projectPath, ".tac");
+  const inWorktree = isInsideWorktree(projectPath);
+
+  // Guard: Never create a symlink at ~/.tac — that's the user-level TAC home,
+  // not a project .tac. This can happen if resolveProjectRoot() or
+  // escapeStaleWorktree() returned ~ as the project root (#1676).
+  const localTacNormalized = localTac.replaceAll("\\", "/");
+  const tacHomePath = tacHome.replaceAll("\\", "/");
+  if (localTacNormalized === tacHomePath) {
+    return localTac;
+  }
+
+  // Guard: If projectPath is a plain subdirectory (not a worktree) of a git
+  // repo that already has a .tac at the git root, do not create a duplicate
+  // symlink in the subdirectory — that causes `.tac 2` collision variants on
+  // macOS (#2380). Worktrees are excluded because they legitimately need their
+  // own .tac symlink pointing at the shared external state dir.
+  if (!inWorktree) {
+    try {
+      const gitRoot = resolveGitRoot(projectPath);
+      const normalizedProject = canonicalizeExistingPath(projectPath);
+      const normalizedRoot = canonicalizeExistingPath(gitRoot);
+      if (normalizedProject !== normalizedRoot) {
+        const rootTac = join(gitRoot, ".tac");
+        if (existsSync(rootTac)) {
+          try {
+            const rootStat = lstatSync(rootTac);
+            if (rootStat.isSymbolicLink() || rootStat.isDirectory()) {
+              return rootStat.isSymbolicLink() ? realpathSync(rootTac) : rootTac;
+            }
+          } catch {
+            // Fall through to normal logic if we can't stat root .tac
+          }
+        }
+      }
+    } catch {
+      // If git root detection fails, fall through to normal logic
+    }
+  }
+
+  // Clean up macOS numbered collision variants (.tac 2, .tac 3, etc.) before
+  // any existence checks — otherwise they accumulate and confuse state (#2205).
+  cleanNumberedTacVariants(projectPath);
+
+  // Ensure external directory exists
+  mkdirSync(externalPath, { recursive: true });
+
+  // Write repo metadata once so cleanup commands can identify this directory later.
+  writeRepoMeta(externalPath, getRemoteUrl(projectPath), resolveGitRoot(projectPath));
+
+  const replaceWithSymlink = (): string => {
+    rmSync(localTac, { recursive: true, force: true });
+    // Defensive: remove any residual entry (e.g. dangling symlink) before creating.
+    try { unlinkSync(localTac); } catch { /* already gone */ }
+    symlinkSync(externalPath, localTac, "junction");
+    return externalPath;
+  };
+
+  // Check for dangling symlinks (e.g. after relocation recovery removed the old
+  // state dir). existsSync follows symlinks, so it returns false for dangling ones.
+  // lstatSync does NOT follow, so we can detect the dangling symlink and replace it.
+  if (!existsSync(localTac)) {
+    try {
+      const stat = lstatSync(localTac);
+      if (stat.isSymbolicLink()) {
+        // Dangling symlink — replace with correct one (#2750).
+        return replaceWithSymlink();
+      }
+    } catch {
+      // lstat also failed — nothing exists at this path
+    }
+    // Nothing exists yet — create symlink.
+    // Defensive: remove any residual entry to avoid EEXIST race (#2750).
+    try { unlinkSync(localTac); } catch { /* nothing to remove */ }
+    symlinkSync(externalPath, localTac, "junction");
+    return externalPath;
+  }
+
+  try {
+    const stat = lstatSync(localTac);
+
+    if (stat.isSymbolicLink()) {
+      // Already a symlink — verify it points to the right place
+      const target = realpathSync(localTac);
+      if (target === externalPath) {
+        return externalPath; // correct symlink, no-op
+      }
+      // In a worktree, mismatched symlinks are always stale. Heal them so
+      // the worktree points at the same external state dir as the main repo.
+      if (inWorktree) {
+        return replaceWithSymlink();
+      }
+      // After identity hash change (e.g. upgrade from path-based to remote-only
+      // hash, or relocation recovery), migrate data from old target to new path
+      // and update the symlink (#2750).
+      if (!hasProjectState(externalPath) && hasProjectState(target)) {
+        try {
+          mkdirSync(externalPath, { recursive: true });
+          const oldEntries = readdirSync(target);
+          for (const entry of oldEntries) {
+            try {
+              const src = join(target, entry);
+              const dst = join(externalPath, entry);
+              try { renameSync(src, dst); } catch { cpSync(src, dst, { recursive: true, force: true }); }
+            } catch { /* continue */ }
+          }
+          try { rmSync(target, { recursive: true, force: true }); } catch { /* non-fatal */ }
+          return replaceWithSymlink();
+        } catch {
+          // Migration failed — preserve old symlink
+          return target;
+        }
+      }
+      // Outside worktrees, preserve custom overrides or legacy symlinks.
+      return target;
+    }
+
+    if (stat.isDirectory()) {
+      // Real directory in the main repo — migration will handle this later.
+      // In worktrees, keep the directory in place and let syncTacStateToWorktree
+      // refresh its contents. Replacing a git-tracked .tac directory with a
+      // symlink makes git think tracked planning files were deleted.
+      return localTac;
+    }
+  } catch {
+    // lstat failed — path exists but we can't stat it
+  }
+
+  return localTac;
+}
+
+// ─── Worktree Detection ─────────────────────────────────────────────────────
+
+/**
+ * Check if the given directory is a git worktree (not the main repo).
+ *
+ * Git worktrees have a `.git` *file* (not directory) containing a
+ * `gitdir:` pointer. This is git's native worktree indicator — no
+ * string marker parsing needed.
+ */
+export function isInsideWorktree(cwd: string): boolean {
+  const gitPath = join(cwd, ".git");
+  try {
+    const stat = lstatSync(gitPath);
+    if (!stat.isFile()) return false;
+    const content = readFileSync(gitPath, "utf-8").trim();
+    return content.startsWith("gitdir:");
+  } catch {
+    return false;
+  }
+}

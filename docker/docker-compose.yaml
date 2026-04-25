@@ -1,0 +1,23 @@
+services:
+  tac:
+    build:
+      context: .
+      dockerfile: Dockerfile.sandbox
+      args:
+        TAC_VERSION: latest
+    container_name: tac-sandbox
+    ports:
+      - "3000:3000"
+    volumes:
+      - ../:/workspace
+      - tac-state:/home/tac/.tac
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=development
+    stdin_open: true
+    tty: true
+
+volumes:
+  tac-state:
+    driver: local

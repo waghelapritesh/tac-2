@@ -1,0 +1,39 @@
+{
+  "name": "@waghelapritesh/rpc-client",
+  "version": "2.77.0",
+  "description": "Standalone RPC client SDK for TAC — zero internal dependencies",
+  "license": "MIT",
+  "tac": {
+    "linkable": true,
+    "scope": "@waghelapritesh",
+    "name": "rpc-client"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/waghelapritesh/tac-2.git",
+    "directory": "packages/rpc-client"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.test.*"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "node --test dist/rpc-client.test.js"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

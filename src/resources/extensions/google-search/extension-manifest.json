@@ -1,0 +1,13 @@
+{
+  "id": "google-search",
+  "name": "Google Search (deprecated stub)",
+  "version": "1.0.0",
+  "description": "Deprecation stub. The google_search tool moved to @tac-extensions/google-search. Install with: tac extensions install @tac-extensions/google-search",
+  "tier": "bundled",
+  "deprecated": true,
+  "requires": { "platform": ">=2.29.0" },
+  "provides": {
+    "tools": [],
+    "hooks": ["session_start"]
+  }
+}

@@ -1,0 +1,411 @@
+{
+  "name": "tac-2",
+  "displayName": "TAC-2",
+  "description": "VS Code integration for the TAC-2 coding agent — sidebar dashboard, @tac chat participant, activity feed, conversation history, code lens, session forking, slash command completion, workflow controls, and 33 commands",
+  "publisher": "FluxLabs",
+  "version": "0.3.0",
+  "icon": "logo.jpg",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/waghelapritesh/tac-2"
+  },
+  "homepage": "https://github.com/waghelapritesh/tac-2/blob/main/vscode-extension/README.md",
+  "bugs": {
+    "url": "https://github.com/waghelapritesh/tac-2/issues"
+  },
+  "keywords": [
+    "ai",
+    "agent",
+    "coding",
+    "tac",
+    "chat",
+    "automation",
+    "claude",
+    "openai",
+    "llm"
+  ],
+  "galleryBanner": {
+    "color": "#1a1a2e",
+    "theme": "dark"
+  },
+  "extensionKind": ["workspace"],
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": [
+    "AI",
+    "Chat"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "tac.start",
+        "title": "TAC: Start Agent"
+      },
+      {
+        "command": "tac.stop",
+        "title": "TAC: Stop Agent"
+      },
+      {
+        "command": "tac.newSession",
+        "title": "TAC: New Session"
+      },
+      {
+        "command": "tac.sendMessage",
+        "title": "TAC: Send Message"
+      },
+      {
+        "command": "tac.cycleModel",
+        "title": "TAC: Cycle Model"
+      },
+      {
+        "command": "tac.cycleThinking",
+        "title": "TAC: Cycle Thinking Level"
+      },
+      {
+        "command": "tac.compact",
+        "title": "TAC: Compact Context"
+      },
+      {
+        "command": "tac.abort",
+        "title": "TAC: Abort Current Operation"
+      },
+      {
+        "command": "tac.exportHtml",
+        "title": "TAC: Export Conversation as HTML"
+      },
+      {
+        "command": "tac.sessionStats",
+        "title": "TAC: Show Session Stats"
+      },
+      {
+        "command": "tac.runBash",
+        "title": "TAC: Run Bash Command"
+      },
+      {
+        "command": "tac.switchModel",
+        "title": "TAC: Switch Model"
+      },
+      {
+        "command": "tac.setThinking",
+        "title": "TAC: Set Thinking Level"
+      },
+      {
+        "command": "tac.steer",
+        "title": "TAC: Steer Agent"
+      },
+      {
+        "command": "tac.listCommands",
+        "title": "TAC: List Available Commands"
+      },
+      {
+        "command": "tac.toggleAutoRetry",
+        "title": "TAC: Toggle Auto-Retry"
+      },
+      {
+        "command": "tac.abortRetry",
+        "title": "TAC: Abort Retry"
+      },
+      {
+        "command": "tac.setSessionName",
+        "title": "TAC: Set Session Name"
+      },
+      {
+        "command": "tac.copyLastResponse",
+        "title": "TAC: Copy Last Response"
+      },
+      {
+        "command": "tac.switchSession",
+        "title": "TAC: Switch Session"
+      },
+      {
+        "command": "tac.refreshSessions",
+        "title": "TAC: Refresh Sessions",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "tac.clearFileDecorations",
+        "title": "TAC: Clear File Decorations"
+      },
+      {
+        "command": "tac.showHistory",
+        "title": "TAC: Show Conversation History"
+      },
+      {
+        "command": "tac.askAboutSymbol",
+        "title": "TAC: Ask About Symbol"
+      },
+      {
+        "command": "tac.clearActivity",
+        "title": "TAC: Clear Activity Feed",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "tac.forkSession",
+        "title": "TAC: Fork Session"
+      },
+      {
+        "command": "tac.toggleSteeringMode",
+        "title": "TAC: Toggle Steering Mode"
+      },
+      {
+        "command": "tac.toggleFollowUpMode",
+        "title": "TAC: Toggle Follow-Up Mode"
+      },
+      {
+        "command": "tac.refactorSymbol",
+        "title": "TAC: Refactor Symbol"
+      },
+      {
+        "command": "tac.findBugsSymbol",
+        "title": "TAC: Find Bugs in Symbol"
+      },
+      {
+        "command": "tac.generateTestsSymbol",
+        "title": "TAC: Generate Tests for Symbol"
+      },
+      {
+        "command": "tac.acceptAllChanges",
+        "title": "TAC: Accept All Agent Changes",
+        "icon": "$(check-all)"
+      },
+      {
+        "command": "tac.discardAllChanges",
+        "title": "TAC: Discard All Agent Changes",
+        "icon": "$(discard)"
+      },
+      {
+        "command": "tac.acceptFileChanges",
+        "title": "Accept Changes",
+        "icon": "$(check)"
+      },
+      {
+        "command": "tac.discardFileChanges",
+        "title": "Discard Changes",
+        "icon": "$(discard)"
+      },
+      {
+        "command": "tac.restoreCheckpoint",
+        "title": "TAC: Restore Checkpoint"
+      },
+      {
+        "command": "tac.fixProblemsInFile",
+        "title": "TAC: Fix Problems in File"
+      },
+      {
+        "command": "tac.fixAllProblems",
+        "title": "TAC: Fix All Problems"
+      },
+      {
+        "command": "tac.clearDiagnostics",
+        "title": "TAC: Clear Agent Diagnostics"
+      },
+      {
+        "command": "tac.commitAgentChanges",
+        "title": "TAC: Commit Agent Changes"
+      },
+      {
+        "command": "tac.createAgentBranch",
+        "title": "TAC: Create Branch for Agent Work"
+      },
+      {
+        "command": "tac.showAgentDiff",
+        "title": "TAC: Show Agent Diff"
+      },
+      {
+        "command": "tac.clearPlan",
+        "title": "TAC: Clear Plan View",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "tac.cycleApprovalMode",
+        "title": "TAC: Cycle Approval Mode"
+      },
+      {
+        "command": "tac.selectApprovalMode",
+        "title": "TAC: Select Approval Mode"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "tac.newSession",
+        "key": "ctrl+shift+g ctrl+shift+n",
+        "mac": "cmd+shift+g cmd+shift+n"
+      },
+      {
+        "command": "tac.cycleModel",
+        "key": "ctrl+shift+g ctrl+shift+m",
+        "mac": "cmd+shift+g cmd+shift+m"
+      },
+      {
+        "command": "tac.cycleThinking",
+        "key": "ctrl+shift+g ctrl+shift+t",
+        "mac": "cmd+shift+g cmd+shift+t"
+      },
+      {
+        "command": "tac.abort",
+        "key": "ctrl+shift+g ctrl+shift+a",
+        "mac": "cmd+shift+g cmd+shift+a"
+      },
+      {
+        "command": "tac.steer",
+        "key": "ctrl+shift+g ctrl+shift+i",
+        "mac": "cmd+shift+g cmd+shift+i"
+      },
+      {
+        "command": "tac.sendMessage",
+        "key": "ctrl+shift+g ctrl+shift+p",
+        "mac": "cmd+shift+g cmd+shift+p"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "tac",
+          "title": "TAC",
+          "icon": "$(hubot)"
+        }
+      ]
+    },
+    "views": {
+      "tac": [
+        {
+          "type": "webview",
+          "id": "tac-sidebar",
+          "name": "TAC Agent"
+        },
+        {
+          "id": "tac-sessions",
+          "name": "Sessions"
+        },
+        {
+          "id": "tac-activity",
+          "name": "Activity"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "tac.refreshSessions",
+          "when": "view == tac-sessions",
+          "group": "navigation"
+        },
+        {
+          "command": "tac.clearActivity",
+          "when": "view == tac-activity",
+          "group": "navigation"
+        }
+      ],
+      "scm/title": [
+        {
+          "command": "tac.acceptAllChanges",
+          "group": "navigation",
+          "when": "scmProvider == tac"
+        },
+        {
+          "command": "tac.discardAllChanges",
+          "group": "navigation",
+          "when": "scmProvider == tac"
+        }
+      ],
+      "scm/resourceState/context": [
+        {
+          "command": "tac.acceptFileChanges",
+          "group": "inline",
+          "when": "scmProvider == tac"
+        },
+        {
+          "command": "tac.discardFileChanges",
+          "group": "inline",
+          "when": "scmProvider == tac"
+        }
+      ]
+    },
+    "chatParticipants": [
+      {
+        "id": "tac.agent",
+        "name": "tac",
+        "fullName": "TAC Agent",
+        "description": "TAC-2 coding agent",
+        "isSticky": true
+      }
+    ],
+    "configuration": {
+      "title": "TAC",
+      "properties": {
+        "tac.binaryPath": {
+          "type": "string",
+          "default": "tac",
+          "description": "Path to the TAC binary"
+        },
+        "tac.autoStart": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically start the TAC agent when the extension activates"
+        },
+        "tac.autoCompaction": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable automatic context compaction"
+        },
+        "tac.codeLens": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show 'Ask TAC' code lens above functions and classes"
+        },
+        "tac.showProgressNotifications": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show progress notification while the agent is working"
+        },
+        "tac.activityFeedMaxItems": {
+          "type": "number",
+          "default": 100,
+          "minimum": 10,
+          "maximum": 500,
+          "description": "Maximum number of items shown in the Activity feed"
+        },
+        "tac.showContextWarning": {
+          "type": "boolean",
+          "default": true,
+          "description": "Warn when context window usage exceeds the threshold"
+        },
+        "tac.contextWarningThreshold": {
+          "type": "number",
+          "default": 80,
+          "minimum": 50,
+          "maximum": 95,
+          "description": "Context window usage percentage that triggers a warning"
+        },
+        "tac.approvalMode": {
+          "type": "string",
+          "default": "auto-approve",
+          "enum": ["auto-approve", "ask", "plan-only"],
+          "enumDescriptions": [
+            "Agent runs freely without prompts",
+            "Prompt before file changes and commands",
+            "Read-only mode — agent can analyze but not modify"
+          ],
+          "description": "Approval mode for agent actions"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch",
+    "package": "vsce package",
+    "publish": "vsce publish"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.95.0",
+    "@vscode/vsce": "^3.7.1",
+    "typescript": "^5.7.0"
+  }
+}

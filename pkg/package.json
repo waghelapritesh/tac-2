@@ -1,0 +1,8 @@
+{
+  "name": "@glittercowboy/tac",
+  "version": "2.77.0",
+  "piConfig": {
+    "name": "tac",
+    "configDir": ".tac"
+  }
+}
